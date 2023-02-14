@@ -1,0 +1,224 @@
+---
+title: "PCA & Clustering Analysis"
+output:
+  pdf_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: '4'
+  html_document:
+    code_folding: show
+    highlight: haddock
+    number_sections: yes
+    theme: lumen
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+  word_document:
+    toc: yes
+    toc_depth: '4'
+urlcolor: blue
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.width=8, fig.height=4)
+options(scipen = 0, digits = 3)  # controls base R output
+# check if you have ISLR package, if not, install it
+if(!require('pacman')) {install.packages('pacman')}
+pacman::p_load(ISLR, tidyverse, data.table,ggplot2, dplyr, gridExtra, ggrepel, plotly, skimr, tidytext) # add the packages needed
+```
+# Case study 2: Breast cancer sub-type
+
+We first read the data using `data.table::fread()` which is a faster way to read in big data than `read.csv()`. 
+
+```{r reading the dataset}
+brca <- fread("brca_subtype.csv")
+# get the sub-type information
+brca_subtype <- brca$BRCA_Subtype_PAM50
+brca <- brca[,-1]
+```
+
+1. Summary and transformation
+
+    a) How many patients are there in each sub-type? 
+```{r}
+table(brca_subtype)
+```
+
+```{r}
+str(brca_subtype)
+brca_subtype<-as.factor(brca_subtype)
+str(brca_subtype)
+```
+    b) Randomly pick 5 genes and plot the histogram by each sub-type.
+
+```{r plotting 5 random genes}
+set.seed(10)
+num_gene <- ncol(brca)
+sample_idx <- sample(num_gene,5)
+
+brca %>% select(all_of(sample_idx)) %>%
+  pivot_longer(cols=everything()) %>%
+  ggplot(aes(x=value, y=..density..))+
+  geom_histogram(aes(fill=name))+
+  facet_wrap(~name, scales="free")+
+  theme_bw()+
+  theme(legend.position = "none")
+```
+
+    c) Remove gene with zero count and no variability. Then apply logarithmic transform.
+
+```{r removing zero count}
+sel_cols <- which(colSums(abs(brca))!=0)
+brca_sub <- brca[,sel_cols,with=F]
+brca_sub <- log2(as.matrix(brca_sub+1e-10))
+```
+
+2. Apply kmeans on the transformed dataset with 4 centers and output the discrepancy table between the real sub-type `brca_subtype` and the cluster labels.
+
+```{r checking the system time and applying k means}
+system.time({brca_sub_kmeans<-kmeans(x=brca_sub,4)})
+```
+```{r discrepancy table}
+saveRDS(brca_sub_kmeans,"brca_kmeans.RDS")
+table(brca_subtype,brca_sub_kmeans$cluster)
+```
+
+3. Spectrum clustering: to scale or not to scale?
+
+    a) Apply PCA on the centered and scaled dataset. How many PCs should we use and why? You are encouraged to use `irlba::irlba()`.
+```{r using irlba to calculate leading 10 PCs}
+brca_sub_pca_centered_scaled<- scale(as.matrix(brca_sub),center=T,scale=T)
+svd_ret <- irlba::irlba(brca_sub_pca_centered_scaled, nv =10)
+names(svd_ret)
+```
+```{r plotting pve_approx}
+svd_var <- svd_ret$d^2/(nrow(brca_sub_pca_centered_scaled)-1)
+pve_apx <- svd_var/num_gene
+pc_score <- (svd_ret$u[,1:4])*(svd_ret$d[1:4])
+plot(pve_apx,type="b",pch=19,frame=F)
+```
+
+###From the graph above, we can conclude that we should use only the first 4 PCs.
+
+
+    b) Plot PC1 vs PC2 of the centered and scaled data and PC1 vs PC2 of the centered but unscaled data side by side. Should we scale or not scale for clustering process? Why? (Hint: to put plots side by side, use `gridExtra::grid.arrange()` or `ggpubr::ggrrange()` or `egg::ggrrange()` for ggplots; use `fig.show="hold"` as chunk option for base plots)
+
+```{r calculating only PC1 and PC2 for both datasets}
+#this chunk takes 2-3 mins to run
+pca_centered_scaled_brca <-prcomp(brca_sub,scale. = T,center=T,rank. = 2) 
+pca_centered_unscaled_brca <-prcomp(brca_sub,scale. = F,center=T,rank. = 2)
+saveRDS(pca_centered_scaled_brca,"pca_centered_scaled_brca.RDS")
+saveRDS(pca_centered_unscaled_brca,"pca_centered_unscaled_brca.RDS")
+```
+
+```{r reading those saved RDS}
+pca_centered_scaled_brca <- readRDS("pca_centered_scaled_brca.RDS")
+pca_centered_unscaled_brca <- readRDS("pca_centered_unscaled_brca.RDS")
+```
+
+```{r plotting scaled and unscaled datasets, fig.show='hold'}
+p1 <- as.data.frame(pca_centered_scaled_brca$x)%>%
+  ggplot(aes(x=PC1, y=PC2))+
+  geom_point()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  ggtitle("PCS for centered and scaled")+
+  theme_bw()
+
+p2 <- as.data.frame(pca_centered_unscaled_brca$x)%>%
+  ggplot(aes(x=PC1, y=PC2))+
+  geom_point()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  ggtitle("PCS for centered and unscaled")+
+  theme_bw()
+
+grid.arrange(p1,p2,ncol=2)
+```
+
+###We should use unscaled data because the clusters are more apparent here.
+
+4. Spectrum clustering: center but do not scale the data
+
+    a) Use the first 4 PCs of the centered and unscaled data and apply kmeans. Find a reasonable number of clusters using within sum of squared with the elbow rule.
+
+```{r redoing PC analysis but now for 4 pcs}
+pca4_centered_unscaled_brca <-prcomp(brca_sub,scale. = F,center=T,rank. = 4)
+saveRDS(pca4_centered_unscaled_brca,"pca4_centered_unscaled_brca.RDS")
+```
+```{r plotting kmeans' wss to determine optimal number of clusters}
+pca4_centered_unscaled_brca <- readRDS("pca4_centered_unscaled_brca.RDS")
+fviz_nbclust(as.data.frame(pca4_centered_unscaled_brca$x), kmeans, method = "wss")
+```
+
+### From the plot above, it clear that we should use 4 clusters.
+
+    b) Choose an optimal cluster number and apply kmeans. Compare the real sub-type and the clustering label as follows: Plot scatter plot of PC1 vs PC2. Use point color to indicate the true cancer type and point shape to indicate the clustering label. Plot the kmeans centroids with black dots. Summarize how good is clustering results compared to the real sub-type.
+
+```{r plotting the real vs est clusters on PC1 vs PC2 axis}
+kmean_ret <- kmeans(x=pca4_centered_unscaled_brca$x,4)
+
+table1<-data.table(x=pca4_centered_unscaled_brca$x[,1],
+              y=pca4_centered_unscaled_brca$x[,2],
+              col=as.factor(brca_subtype),
+              cl=as.factor(kmean_ret$cluster))
+
+table2 <- data.table(x=kmean_ret$centers[,1],y=kmean_ret$centers[,2])
+table2 <- round(table2,3)
+
+p<-ggplot()+
+  geom_point(data = table1, aes(x=x,y=y,col=col,shape=cl))+
+  labs(color="Cancer Type",shape="Cluster")+
+  xlab("PC1")+
+  ylab("PC2")+
+  geom_point(data = table2, aes(x=x, y=y), color = "black",size=5)+
+  theme_bw()
+p
+```
+### Although there are a few incorrect labels, I believe that the algorithm did a great job.
+
+    c) Compare the clustering result from applying kmeans to the original data and the clustering result from applying kmeans to 4 PCs. Does PCA help in kmeans clustering? What might be the reasons if PCA helps?
+
+```{r discrepancy table for both}
+print("K means on original data")
+table(brca_subtype,brca_sub_kmeans$cluster)
+print("K means on PC1-PC4 data")
+table(brca_subtype,kmean_ret$cluster)
+```
+### Even though we ignore all but 4 PCs, the discrepancy table shows that the K means algo run on PC1-PC4 data gives a results very close to the result from applying K-means to the actual dataset. PCA works because most of the information/variance hidden in the data gets captured in just 4 dimensions.
+
+    d) Now we have an x patient with breast cancer but with unknown sub-type. We have this patient's mRNA sequencing data. Project this x patient to the space of PC1 and PC2. (Hint: remember we remove some gene with no counts or no variablity, take log and centered) Plot this patient in the plot in iv) with a black dot. Calculate the Euclidean distance between this patient and each of centroid of the cluster. Can you tell which sub-type this patient might have? 
+    
+```{r}
+x_patient <- fread("brca_x_patient.csv")
+dim(x_patient)
+```
+```{r removing cols with zero count and taking the log transform}
+x_patient_sub <- x_patient[,sel_cols,with=F]
+x_patient_sub <- log2(as.matrix(x_patient_sub+1e-10))
+
+dim(x_patient_sub)
+```
+### Same dimensions as the original dataset; thus, verified.
+
+```{r centering the datapoint using means from the original dataset}
+x_patient_sub <- x_patient_sub - colMeans(brca_sub)
+x_patient_sub[,1:5]
+```
+```{r}
+x_loadings <- pca4_centered_unscaled_brca$rotation[,1:4] #pc loadings from earlier analysis
+x_pc_scores <- as.matrix(x_patient_sub) %*% as.matrix(x_loadings)
+x_pc_scores
+```
+```{r}
+p + geom_point(data=data.table(x_pc_scores),aes(x=PC1,y=PC2),color="green",size=9)
+```
+```{r calculating euclidean distance from centroids}
+#kmean_ret$centers[,1:2]
+combined_matrix <- rbind(x_pc_scores,kmean_ret$centers[,1:4])
+edist <- dist(combined_matrix, method = "euclidean")
+edist
+```
+### The euclidean distances of the given person from the centroids are 536 from Cluster 1, 623 from Cluster 2, 139 from Cluster 3, and 501 from Cluster 4. The point is closest to Cluster 3 or the Basal sub-type.
+
