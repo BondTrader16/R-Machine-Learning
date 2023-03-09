@@ -1,0 +1,184 @@
+---
+title: "Predicting Heart Disease"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, results = "hide", fig.width=8, fig.height=4)
+if(!require('pacman')) {
+  install.packages('pacman')
+}
+pacman::p_load(bestglm, glmnet, leaps, car, tidyverse, pROC, caret)
+```
+
+```{r EDA}
+fram_data <- read.csv("data/Framingham.dat",sep=",",header=T,as.is=T)
+str(fram_data)
+names(fram_data)
+summary(fram_data)
+```
+```{r}
+fram_data <- fram_data %>% rename(HD = Heart.Disease.) %>% mutate (HD=as.factor(HD), SEX = as.factor(SEX))
+str(fram_data)
+```
+```{r}
+tail(fram_data,1)
+```
+```{r}
+fram_data.new <- fram_data[1407,]
+fram_data <- fram_data[-1407,]
+```
+
+```{r}
+summary(fram_data)
+```
+```{r}
+sum(is.na(fram_data))
+```
+```{r}
+fram_data %>% group_by(HD) %>% summarise(mean(SBP))
+```
+```{r}
+#plot(fram_data$HD, fram_data$SBP, ylab="SBP", xlab="HD")
+boxplot(SBP~HD, fram_data)
+```
+```{r}
+plot(fram_data$SBP,fram_data$HD, col=fram_data$HD, xlab="SBP", ylab="HD")
+legend("right", legend=c("0","1"),lty=c(1,1),lwd=c(2,2),col=unique(fram_data$HD))
+```
+```{r}
+plot(jitter(as.numeric(fram_data$HD), factor = 0.5) ~ fram_data$SBP, pch=4, col=fram_data$HD, ylab="HD", xlab="SBP")
+legend("right",legend=c("0","1"),lty=c(1,1),lwd=c(2,2),col=unique(fram_data$HD))
+```
+```{r}
+fram_data %>% mutate(HD=as.numeric(HD)-1) %>% ggplot(aes(x=SBP, y=HD)) + geom_jitter(height=.05, aes(color=factor(HD)))
+```
+```{r}
+set.seed(2)
+fram_data[sample(1:1406,10),c("HD","SBP")]
+```
+```{r}
+# HD as numeric; assumes gaussian distribution of as.numeric(HD)
+#summary(glm(as.numeric(HD)~SBP,fram_data, family=gaussian)) 
+# HD as factor; assumes response is categorical and family is binomial
+fit1 <- glm(HD~SBP, fram_data, family=binomial(logit))
+summary(fit1, results=TRUE)
+```
+```{r}
+fit1.predict <- predict(fit1, fram_data.new, type="response")
+fit1.predict
+```
+```{r}
+fram_data %>% mutate(HD=as.numeric(HD)-1) %>% ggplot(aes(x=SBP, y=HD)) + geom_jitter(height = .05, aes(color=factor(HD))) + geom_smooth(method="glm",method.args=list(family="binomial"), se=FALSE)+ ylab("Prob(HD=1)")
+```
+```{r}
+x<-seq(100,300,by=1)
+y<-exp(-3.66+0.0159*x)/(1+exp(-3.66+0.0159*x))
+plot(x,y,pch=16, type="l",xlab="SBP", ylab="Prob of P(Y=1|SBP)")
+```
+```{r}
+summary(fit1)
+```
+```{r}
+confint.default(fit1)
+```
+```{r}
+chi.sq <- 1485.9-143.8
+pchisq(chi.sq,1,lower.tail=FALSE)
+```
+```{r}
+anova(fit1,test="Chisq")
+Anova(fit1)
+confint(fit1)
+```
+```{r}
+#Linear boundary classification
+fram_data %>% mutate(HD=as.numeric(HD)-1) %>% ggplot(aes(x=SBP,y=HD))+ geom_jitter(height=.05, aes(color=factor(HD)))+geom_smooth(method="glm",method.args=list(family="binomial"),se=FALSE) + geom_vline(xintercept=230.18, col="red")+ ggtitle("Classifier: HD=1 if prob > 0.5")+ylab("Prob(HD=1")
+```
+```{r}
+#Linear boundary classification
+fram_data %>% mutate(HD=as.numeric(HD)-1) %>% ggplot(aes(x=SBP,y=HD))+ geom_jitter(height=.05, aes(color=factor(HD)))+geom_smooth(method="glm",method.args=list(family="binomial"),se=FALSE) + geom_vline(xintercept=230.18, col="red")+ geom_vline(xintercept=187, col="green") +ggtitle("Classifier: HD=1 if prob > 0.5")+ylab("Prob(HD=1")
+```
+```{r}
+# Confusion Matrix
+fit1 <-glm (HD~SBP, fram_data, family=binomial(logit))
+summary(fit1)
+fit1.pred.5 <- ifelse(fit1$fitted > 1/2, "1", "0")
+set.seed(10)
+output1 <- data.frame(fram_data$HD, fit1.pred.5, fit1$fitted)[sample(1406,10),]
+names(output1) <- c("HD","Predicted HD","Prob")
+output1
+```
+```{r}
+cm.5 <- table(fit1.pred.5, fram_data$HD)
+cm.5
+```
+```{r}
+sensitivity <- cm.5[2,2]/sum(cm.5[,2])
+sensitivity
+```
+```{r}
+### ROC curves
+fit1.roc <- roc(fram_data$HD, fit1$fitted, plot=T, col="blue")
+```
+```{r}
+names(fit1.roc)
+plot(fit1.roc)
+```
+```{r}
+plot(1-fit1.roc$specificities, fit1.roc$sensitivities, col="red", pch=16, xlab="False Positive", ylab="Sensitivity")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
