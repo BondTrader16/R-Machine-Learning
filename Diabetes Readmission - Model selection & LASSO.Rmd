@@ -1,0 +1,229 @@
+---
+title: "Predicting readmission probability for diabetes inpatients"
+date: ' '
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: '4'
+  html_document:
+    code_folding: show
+    highlight: haddock
+    theme: lumen
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+  word_document:
+    toc: yes
+    toc_depth: '4'
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.width = 7, fig.height = 4)
+if(!require("pacman")) install.packages("pacman")
+pacman::p_load(dplyr, ggplot2, glmnet, car, data.table, ggplot, plotly)   #add your packages here
+```
+
+#Loading data and recoding the last column
+```{r}
+data.fl <- read.csv("readmission.csv",header=T, na.string = c("","?"))
+data <- data.fl
+names(data)
+```
+#Cheking for missing values
+```{r}
+sum(is.na(data))
+```
+```{r}
+data <- na.omit(data)
+sum(is.na(data))
+dim(data)
+```
+#Analyzing the data types
+```{r}
+str(data)
+```
+#Cheking readmitted col
+```{r}
+unique(data$readmitted)
+head(data$readmitted)
+```
+#Recoding this col
+```{r}
+data$readmitted <- ifelse((data$readmitted == ">30") | (data$readmitted == "<30"), "YES", data$readmitted)
+head(data$readmitted)
+```
+#Checking whether chr data types are truly factors or not
+```{r}
+unique(data$diag2_mod)
+```
+#Above analysis suggests that (as an example) diag2_mod has 25 unique values out of 100,000+ observations, so we might want to treat it as a factor. This applies to other chr data types also
+
+#Convering chr to factors
+```{r}
+data$readmitted <- as.factor(data$readmitted)
+#data$readmitted <- (ifelse(data$readmitted =="YES", "1", "0"))
+str(data$readmitted)
+```
+#Splitting the data
+```{r}
+data.fl <- data
+
+numl <- 0.02 #using this low number because it otherwise is becoming very computationally intensive
+
+#N <- length(data$readmitted)
+#n1 <- floor(numl*N)
+#set.seed(10)
+
+#idx_train <- sample(N, n1)
+#idx_no_train <- (which(! seq(1:N) %in% idx_train))
+#idx_val <- which(! idx_train %in% idx_no_train)
+#data <- data.fl[idx_train,]
+#data.val <- data.fl[idx_val,]
+
+
+# Split the data:
+N <- length(data$readmitted)
+n1 <- floor(.6*N)
+n2 <- floor(.2*N)
+set.seed(10)
+
+# Split data to three portions of .6, .2 and .2 of data size N
+idx_train <- sample(N, n1)
+idx_no_train <- (which(! seq(1:N) %in% idx_train))
+idx_test <- sample( idx_no_train, n2)
+idx_val <- which(! idx_no_train %in% idx_test)
+data.train <- data.fl[idx_train,]
+data.test <- data.fl[idx_test,]
+data.val <- data.fl[idx_val,]
+
+data <-rbind(data.train,data.test)
+
+```
+
+1) Identify important factors that capture the chance of a readmission within 30 days.
+
+**Step I: Prepare the design matrix and response**
+```{r}
+Y <- data$readmitted
+X <- model.matrix(readmitted~., data=data)[,-1]
+dim(X)
+```
+**Step II: Select a lasso model** 
+```{r results=TRUE}
+set.seed(10)
+fit1.cv <- cv.glmnet(X, Y, alpha=1, family="binomial", nfolds = 10, type.measure = "deviance")  
+plot(fit1.cv)
+```
+#Model based on lambda.1se
+```{r results=TRUE}
+coef.1se <- coef(fit1.cv, s="lambda.1se")  
+coef.1se <- coef.1se[which(coef.1se !=0),] 
+as.matrix(coef.1se)
+```
+#Model based on lambda.min
+```{r results=TRUE}
+coef.min <- coef(fit1.cv, s="lambda.min") 
+coef.min <- coef.min[which(coef.min !=0), ]
+as.matrix(coef.min)
+```
+# Both the models use all the variables, and appear to be the same.
+
+2) For the purpose of classification, propose a model that can be used to predict whether a patient will be a readmit within 30 days. Justify your choice. Hint: use a decision criterion, such as AUC, to choose among a few candidate models.
+
+#Fitting model using beta.1se
+```{r}
+fit.logit.1 <- glm(readmitted~ encounter_id+patient_nbr+race+gender+time_in_hospital+num_procedures+num_medications+number_outpatient+number_emergency+number_inpatient+number_diagnoses+max_glu_serum+A1Cresult+metformin+glimepiride+glipizide+glyburide+pioglitazone+rosiglitazone+insulin+change+diabetesMed+disch_disp_modified+adm_src_mod+adm_typ_mod+age_mod+diag1_mod+diag2_mod+diag3_mod, family=binomial, data=data)
+Anova(fit.logit.1)
+```
+
+#Fitting model using beta.min (This and prior model differ in just 1 variable)
+```{r}
+fit.logit.2 <- glm(readmitted~ encounter_id+patient_nbr+race+gender+time_in_hospital+num_lab_procedures+num_procedures+num_medications+number_outpatient+number_emergency+number_inpatient+number_diagnoses+max_glu_serum+A1Cresult+metformin+glimepiride+glipizide+glyburide+pioglitazone+rosiglitazone+insulin+change+diabetesMed+disch_disp_modified+adm_src_mod+adm_typ_mod+age_mod+diag1_mod+diag2_mod+diag3_mod, family=binomial, data=data)
+Anova(fit.logit.2)
+```
+
+#Using AUC to compare the two models
+```{r}
+fit.logit.1.1 <- glm(readmitted~ encounter_id+patient_nbr+race+gender+time_in_hospital+num_procedures+num_medications+number_outpatient+number_emergency+number_inpatient+number_diagnoses+max_glu_serum+A1Cresult+metformin+glimepiride+glipizide+glyburide+pioglitazone+rosiglitazone+insulin+change+diabetesMed+disch_disp_modified+adm_src_mod+adm_typ_mod+age_mod+diag1_mod+diag2_mod+diag3_mod, family=binomial(logit), data=data)
+
+fit.logit.2.1 <- glm(readmitted~ encounter_id+patient_nbr+race+gender+time_in_hospital+num_lab_procedures+num_procedures+num_medications+number_outpatient+number_emergency+number_inpatient+number_diagnoses+max_glu_serum+A1Cresult+metformin+glimepiride+glipizide+glyburide+pioglitazone+rosiglitazone+insulin+change+diabetesMed+disch_disp_modified+adm_src_mod+adm_typ_mod+age_mod+diag1_mod+diag2_mod+diag3_mod, family=binomial(logit), data=data)
+
+fit.logit.1.roc <- roc(data$readmitted, fit.logit.1$fitted)
+fit.logit.2.roc <- roc(data$readmitted, fit.logit.2$fitted)
+fit.logit.1.1.roc <- roc(data$readmitted, fit.logit.1.1$fitted)
+fit.logit.2.1.roc <- roc(data$readmitted, fit.logit.2.1$fitted)
+```
+
+#Plotting them
+```{r}
+plot(1-fit.logit.1.roc$specificities,
+fit.logit.1.roc$sensitivities, col="red", lwd=3, type="l",
+xlab="False Positive",
+ylab="Sensitivity")
+lines(1-fit.logit.2.roc$specificities, fit.logit.2.roc$sensitivities, col="blue", lwd=3)
+lines(1-fit.logit.1.1.roc$specificities, fit.logit.1.1.roc$sensitivities, col="green", lwd=3)
+lines(1-fit.logit.2.1.roc$specificities, fit.logit.2.1.roc$sensitivities, col="orange", lwd=3)
+legend("bottomright",
+c(paste0("fit.logit.1 AUC=", round(fit.logit.1.roc$auc,2)),
+paste0("fit.logit.2 AUC=", round(fit.logit.2.roc$auc, 2)),
+paste0("fit.logit.1.1 AUC=", round(fit.logit.1.1.roc$auc, 2)),
+paste0("fit.logit.2.1 AUC=", round(fit.logit.2.1.roc$auc, 2))),
+col=c("red", "blue", "green","orange"),
+lty=1)
+```
+
+#These models are nearly the same, so we work with the simplest possible model below.
+```{r}
+Anova(fit.logit.1.1)
+```
+#Fitting and comparing a reduced model, removed "change"
+```{r}
+fit.logit.1.1.2 <- glm(readmitted~ encounter_id+patient_nbr+race+gender+time_in_hospital+num_procedures+num_medications+number_outpatient+number_emergency+number_inpatient+number_diagnoses+max_glu_serum+A1Cresult+metformin+glimepiride+glipizide+glyburide+pioglitazone+rosiglitazone+insulin+diabetesMed+disch_disp_modified+adm_src_mod+adm_typ_mod+age_mod+diag1_mod+diag2_mod+diag3_mod, family=binomial(logit), data=data)
+
+anova(fit.logit.1.1.2, fit.logit.1.1, test="Chisq")
+```
+```{r}
+Anova(fit.logit.1.1.2)
+```
+#Fitting and comparing a reduced model, removed "pioglitazone" and "max_glu_serum"
+```{r}
+fit.logit.1.1.3 <- glm(readmitted~ encounter_id+patient_nbr+race+gender+time_in_hospital+num_procedures+num_medications+number_outpatient+number_emergency+number_inpatient+number_diagnoses+A1Cresult+metformin+glimepiride+glipizide+glyburide+rosiglitazone+insulin+diabetesMed+disch_disp_modified+adm_src_mod+adm_typ_mod+age_mod+diag1_mod+diag2_mod+diag3_mod, family=binomial(logit), data=data)
+
+anova(fit.logit.1.1.3, fit.logit.1.1.2, test="Chisq")
+```
+```{r}
+Anova(fit.logit.1.1.3)
+```
+#Fitting and comparing a reduced model, removed "glyburide"
+```{r}
+fit.logit.1.1.4 <- glm(readmitted~ encounter_id+patient_nbr+race+gender+time_in_hospital+num_procedures+num_medications+number_outpatient+number_emergency+number_inpatient+number_diagnoses+A1Cresult+metformin+glimepiride+glipizide+rosiglitazone+insulin+diabetesMed+disch_disp_modified+adm_src_mod+adm_typ_mod+age_mod+diag1_mod+diag2_mod+diag3_mod, family=binomial(logit), data=data)
+
+anova(fit.logit.1.1.4, fit.logit.1.1.3, test="Chisq")
+```
+```{r}
+Anova(fit.logit.1.1.4)
+```
+#Fitting and comparing a reduced model i.e., removing "glimepiride" led to a reduction in model quality as measured by p-value, so we stop here and take the previous fit.logit.1.1.4 as our final model.
+
+3) Based on a quick and somewhat arbitrary guess, we estimate **it costs twice as much** to mislabel a readmission than it does to mislabel a non-readmission. Based on this risk ratio, propose a specific classification rule to minimize the cost. 
+
+#P(Y=Yes|x)>0.5/(1+0.5)=1/3
+#logit > log((1/3)/(2/3))= -0.6931
+
+
+4) We suggest you to split the data first to Training/Testing/Validation data:
+
+- Use training/testing data to land a final model (If you only use LASSO to land a final model, we will not need testing data since all the decisions are made with cross-validations.)
+
+#Yes, we only used LASSO. So to begin with we combined the training and the testing data to build the model and use cross validation.
+
+- Evaluate the final model with the validation data to give an honest assessment of your final model.
+```{r}
+predictions <- predict(fit.logit.1.1.4, newdata = data.val, type = "response")
+predicted.classes <- as.factor(ifelse(predictions > 0.334, "2", "1"))
+MCE.bayes <- (5*sum(predictions[data.val$readmitted == "2"] != "2")
+              + sum(predictions[data.val$readmitted == "1"] != "1"))/length(data.val$readmitted)
+MCE.bayes
+```
+
